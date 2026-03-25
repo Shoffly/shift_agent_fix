@@ -1,9 +1,13 @@
 """
-Shift Agents Manager — Streamlit App
-Reads and updates the wholesale_test.shift_agents table in BigQuery.
+Streamlit app to manage agent_schedule table in BigQuery.
+Displays a grid of agents × days with role dropdowns.
+Changes are written back to BigQuery on save.
+
+Run: streamlit run app.py
 """
 
 import streamlit as st
+import pandas as pd
 from google.cloud import bigquery
 from google.oauth2 import service_account
 
@@ -12,34 +16,11 @@ from google.oauth2 import service_account
 # ---------------------------------------------------------------------------
 PROJECT_ID = "pricing-338819"
 DATASET_ID = "wholesale_test"
-TABLE_ID = "shift_agents"
+TABLE_ID = "agent_schedule"
 FULL_TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}"
 
-# All known agents across all shifts (master list for the multiselect)
-ALL_AGENTS = sorted([
-    "hagar.ali@sylndr.com",
-    "hagar.nazeh@sylndr.com",
-    "mohamed.aly@sylndr.com",
-    "mohamed.hanfy@sylndr.com",
-    "monira.galal@sylndr.com",
-    "omar.naser@sylndr.com",
-    "nada.amr@sylndr.com",
-    "sama.mostafa@sylndr.com",
-    "dunia.naser@sylndr.com",
-    "zahra.sayed@sylndr.com",
-    "esraa.tarek@sylndr.com",
-    "karim.wael@sylndr.com",
-    "mohamed.elsaied@sylndr.com",
-    "dunya.sayed@sylndr.com",
-    "mai.sobhy@sylndr.com",
-    "kerolos.reyad@sylndr.com",
-])
-
-SHIFT_LABELS = {
-    "Cash_Morning": "☀️ Cash Morning",
-    "Cash_Night": "🌙 Cash Night",
-    "Swift": "⚡ Swift",
-}
+DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+ROLE_OPTIONS = ["OFF", "Cash_Morning", "Cash_Night", "Swift", "Dealer", "Premium"]
 
 
 # ---------------------------------------------------------------------------
@@ -65,135 +46,197 @@ def get_bq_client():
     return bigquery.Client(credentials=credentials, project=PROJECT_ID)
 
 
-def load_shifts(client) -> dict[str, list[str]]:
-    """Return {shift_name: [agent_emails]} from BigQuery."""
-    query = f"SELECT shift_name, agents FROM `{FULL_TABLE_ID}`"
-    rows = client.query(query).result()
-    shifts = {}
+def load_schedule() -> pd.DataFrame:
+    """Load current schedule from BigQuery into a DataFrame with columns:
+    email, Sun, Mon, Tue, Wed, Thu, Fri, Sat
+    """
+    client = get_bq_client()
+    query = f"""
+        SELECT email, roles
+        FROM `{FULL_TABLE_ID}`
+        ORDER BY email
+    """
+    rows = list(client.query(query).result())
+
+    if not rows:
+        return pd.DataFrame(columns=["email"] + DAYS)
+
+    data = []
     for row in rows:
-        agents = [a.strip() for a in row.agents.split(",") if a.strip()]
-        shifts[row.shift_name] = agents
-    return shifts
+        entry = {"email": row.email}
+        roles = list(row.roles) if row.roles else ["OFF"] * 7
+        # Pad to 7 if somehow short
+        roles = (roles + ["OFF"] * 7)[:7]
+        for i, day in enumerate(DAYS):
+            entry[day] = roles[i]
+        data.append(entry)
+
+    return pd.DataFrame(data)
 
 
-def update_shift(client, shift_name: str, agents: list[str]):
-    """Overwrite the agents string for a given shift using DML."""
-    agents_str = ",".join(agents)
-    dml = f"""
-        UPDATE `{FULL_TABLE_ID}`
-        SET agents = @agents
-        WHERE shift_name = @shift_name
-    """
+def save_schedule(df: pd.DataFrame):
+    """Overwrite the entire agent_schedule table with the DataFrame contents."""
+    client = get_bq_client()
+
+    # Build rows for insertion
+    rows = []
+    for _, row in df.iterrows():
+        roles = [row[day] for day in DAYS]
+        rows.append({"email": row["email"], "roles": roles})
+
+    # Delete all existing rows and re-insert (simplest for a small table)
+    delete_query = f"DELETE FROM `{FULL_TABLE_ID}` WHERE TRUE"
+    client.query(delete_query).result()
+
+    if rows:
+        errors = client.insert_rows_json(FULL_TABLE_ID, rows)
+        if errors:
+            st.error(f"BigQuery insert errors: {errors}")
+            return False
+
+    return True
+
+
+def add_agent(email: str, roles: list[str]):
+    """Insert a single new agent row."""
+    client = get_bq_client()
+    errors = client.insert_rows_json(FULL_TABLE_ID, [{"email": email.lower().strip(), "roles": roles}])
+    if errors:
+        st.error(f"Insert error: {errors}")
+        return False
+    return True
+
+
+def delete_agent(email: str):
+    """Delete a single agent row."""
+    client = get_bq_client()
+    query = f"DELETE FROM `{FULL_TABLE_ID}` WHERE email = @email"
     job_config = bigquery.QueryJobConfig(
-        query_parameters=[
-            bigquery.ScalarQueryParameter("agents", "STRING", agents_str),
-            bigquery.ScalarQueryParameter("shift_name", "STRING", shift_name),
-        ]
+        query_parameters=[bigquery.ScalarQueryParameter("email", "STRING", email)]
     )
-    client.query(dml, job_config=job_config).result()
+    client.query(query, job_config=job_config).result()
 
 
 # ---------------------------------------------------------------------------
-# UI
+# Streamlit UI
 # ---------------------------------------------------------------------------
-st.set_page_config(page_title="Shift Agents Manager", page_icon="👥", layout="wide")
+st.set_page_config(page_title="Agent Schedule Manager", layout="wide")
 
-st.markdown(
-    """
-    <style>
-    .block-container { max-width: 900px; }
-    div[data-testid="stVerticalBlock"] > div { padding: 0.25rem 0; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.title("Agent Schedule Manager")
+st.caption(f"`{FULL_TABLE_ID}`")
 
-st.title("👥 Shift Agents Manager")
-st.caption("Edit which agents are assigned to each shift. Changes write directly to BigQuery.")
+# Load data
+if "schedule_df" not in st.session_state or st.session_state.get("reload"):
+    st.session_state.schedule_df = load_schedule()
+    st.session_state.reload = False
 
-client = get_bq_client()
-
-# Load current state
-if "shifts" not in st.session_state or st.session_state.get("_reload"):
-    st.session_state.shifts = load_shifts(client)
-    st.session_state._reload = False
-
-shifts = st.session_state.shifts
+df = st.session_state.schedule_df
 
 # ---------------------------------------------------------------------------
-# Render one card per shift
+# Main schedule grid
 # ---------------------------------------------------------------------------
-for shift_name in ["Cash_Morning", "Cash_Night", "Swift"]:
-    current_agents = shifts.get(shift_name, [])
-    label = SHIFT_LABELS.get(shift_name, shift_name)
+st.subheader("Weekly Schedule")
+st.markdown("Edit roles per agent per day. Click **Save Changes** when done.")
 
-    st.markdown("---")
-    col_header, col_count = st.columns([4, 1])
-    with col_header:
-        st.subheader(label)
-    with col_count:
-        st.metric("Agents", len(current_agents))
-
-    # Multiselect to add/remove agents
-    selected = st.multiselect(
-        f"Agents on **{shift_name}**",
-        options=ALL_AGENTS,
-        default=current_agents,
-        key=f"ms_{shift_name}",
-        label_visibility="collapsed",
+if df.empty:
+    st.warning("No agents found in the table. Add one below.")
+else:
+    # Build an editable dataframe with dropdowns
+    edited_df = st.data_editor(
+        df,
+        column_config={
+            "email": st.column_config.TextColumn("Email", disabled=True, width="large"),
+            **{
+                day: st.column_config.SelectboxColumn(
+                    day,
+                    options=ROLE_OPTIONS,
+                    required=True,
+                    width="small",
+                )
+                for day in DAYS
+            },
+        },
+        hide_index=True,
+        use_container_width=True,
+        key="schedule_editor",
     )
 
-    # Quick add: type a new email not in master list
-    new_email = st.text_input(
-        "Add a new agent email (not in list)",
-        key=f"new_{shift_name}",
-        placeholder="e.g. newagent@sylndr.com",
-    )
-
-    col_save, col_status = st.columns([1, 3])
-    with col_save:
-        if st.button("💾 Save", key=f"save_{shift_name}", use_container_width=True):
-            final_agents = list(selected)
-            if new_email and new_email.strip():
-                clean = new_email.strip().lower()
-                if clean not in final_agents:
-                    final_agents.append(clean)
-                    # Also add to master list for future use in this session
-                    if clean not in ALL_AGENTS:
-                        ALL_AGENTS.append(clean)
-                        ALL_AGENTS.sort()
-
-            if not final_agents:
-                st.warning("Cannot save an empty shift.")
+    # Save button
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("💾 Save Changes", type="primary", use_container_width=True):
+            with st.spinner("Saving to BigQuery..."):
+                success = save_schedule(edited_df)
+            if success:
+                st.success("Schedule saved!")
+                st.session_state.schedule_df = edited_df
             else:
-                try:
-                    update_shift(client, shift_name, final_agents)
-                    st.session_state.shifts[shift_name] = final_agents
-                    st.success(f"Updated **{shift_name}** → {len(final_agents)} agents")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"BigQuery error: {e}")
+                st.error("Failed to save. Check errors above.")
 
-    with col_status:
-        # Show diff vs what's in DB
-        db_set = set(shifts.get(shift_name, []))
-        ui_set = set(selected)
-        if new_email and new_email.strip():
-            ui_set.add(new_email.strip().lower())
-        if db_set != ui_set:
-            added = ui_set - db_set
-            removed = db_set - ui_set
-            parts = []
-            if added:
-                parts.append(f"**+{len(added)}** added")
-            if removed:
-                parts.append(f"**-{len(removed)}** removed")
-            st.info(f"Unsaved changes: {', '.join(parts)}")
+    with col2:
+        if st.button("🔄 Reload from DB", use_container_width=False):
+            st.session_state.reload = True
+            st.rerun()
 
 # ---------------------------------------------------------------------------
-# Footer: reload from DB
+# Add / Remove agent
 # ---------------------------------------------------------------------------
-st.markdown("---")
-if st.button("🔄 Reload from database"):
-    st.session_state._reload = True
-    st.rerun()
+st.divider()
+
+col_add, col_remove = st.columns(2)
+
+with col_add:
+    st.subheader("Add Agent")
+    new_email = st.text_input("Email", placeholder="agent@sylndr.com")
+    new_default_role = st.selectbox("Default role for all days", ROLE_OPTIONS, index=0)
+
+    if st.button("➕ Add Agent", use_container_width=True):
+        if not new_email or "@" not in new_email:
+            st.error("Enter a valid email.")
+        elif new_email.lower().strip() in df["email"].values:
+            st.error("Agent already exists.")
+        else:
+            roles = [new_default_role] * 7
+            with st.spinner("Adding..."):
+                success = add_agent(new_email, roles)
+            if success:
+                st.success(f"Added {new_email}")
+                st.session_state.reload = True
+                st.rerun()
+
+with col_remove:
+    st.subheader("Remove Agent")
+    if not df.empty:
+        remove_email = st.selectbox("Select agent to remove", df["email"].tolist())
+        if st.button("🗑️ Remove Agent", type="secondary", use_container_width=True):
+            with st.spinner("Removing..."):
+                delete_agent(remove_email)
+            st.success(f"Removed {remove_email}")
+            st.session_state.reload = True
+            st.rerun()
+    else:
+        st.info("No agents to remove.")
+
+# ---------------------------------------------------------------------------
+# Shift summary (read-only view)
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Shift Summary — Who's on today?")
+
+if not df.empty:
+    import datetime
+    # Python weekday → template index (Sun=0)
+    today_idx = (datetime.datetime.now().weekday() + 1) % 7
+    today_name = DAYS[today_idx]
+
+    st.markdown(f"**Today: {today_name}**")
+
+    today_col = edited_df[today_name] if "edited_df" in dir() else df[today_name]
+    emails = edited_df["email"] if "edited_df" in dir() else df["email"]
+
+    for role in ["Cash_Morning", "Cash_Night", "Swift", "Dealer", "Premium"]:
+        agents_on = emails[today_col == role].tolist()
+        if agents_on:
+            st.markdown(f"**{role}:** {', '.join(agents_on)}")
+        else:
+            st.markdown(f"**{role}:** —")
