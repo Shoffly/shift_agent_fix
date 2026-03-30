@@ -48,9 +48,6 @@ def get_bq_client():
 
 
 def load_schedule() -> pd.DataFrame:
-    """Load current schedule from BigQuery into a DataFrame with columns:
-    email, Sun, Mon, Tue, Wed, Thu, Fri, Sat
-    """
     client = get_bq_client()
     query = f"""
         SELECT email, roles
@@ -66,7 +63,6 @@ def load_schedule() -> pd.DataFrame:
     for row in rows:
         entry = {"email": row.email}
         roles = list(row.roles) if row.roles else ["OFF"] * 7
-        # Pad to 7 if somehow short
         roles = (roles + ["OFF"] * 7)[:7]
         for i, day in enumerate(DAYS):
             entry[day] = roles[i]
@@ -76,49 +72,49 @@ def load_schedule() -> pd.DataFrame:
 
 
 def save_schedule(df: pd.DataFrame):
-    """Overwrite the entire agent_schedule table with the DataFrame contents
-    using DML only (no streaming inserts) to avoid buffer conflicts.
-    """
     client = get_bq_client()
 
+    # Delete all existing rows
+    client.query(f"DELETE FROM `{FULL_TABLE_ID}` WHERE TRUE").result()
+
     if df.empty:
-        client.query(f"DELETE FROM `{FULL_TABLE_ID}` WHERE TRUE").result()
         return True
 
-    # Build a VALUES clause for all rows
-    value_strings = []
+    # Insert each row via parameterized DML
     for _, row in df.iterrows():
-        email = row["email"].replace("'", "\\'")
         roles = [row[day] for day in DAYS]
-        roles_str = ", ".join(f"'{r}'" for r in roles)
-        value_strings.append(f"('{email}', [{roles_str}])")
+        query = f"""
+            INSERT INTO `{FULL_TABLE_ID}` (email, roles)
+            VALUES (@email, @roles)
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("email", "STRING", row["email"]),
+                bigquery.ArrayQueryParameter("roles", "STRING", roles),
+            ]
+        )
+        client.query(query, job_config=job_config).result()
 
-    values_clause = ",\n".join(value_strings)
-
-    query = f"""
-        DELETE FROM `{FULL_TABLE_ID}` WHERE TRUE;
-        INSERT INTO `{FULL_TABLE_ID}` (email, roles)
-        VALUES {values_clause};
-    """
-    client.query(query).result()
     return True
 
 
 def add_agent(email: str, roles: list[str]):
-    """Insert a single new agent row via DML."""
     client = get_bq_client()
-    email_clean = email.lower().strip().replace("'", "\\'")
-    roles_str = ", ".join(f"'{r}'" for r in roles)
     query = f"""
         INSERT INTO `{FULL_TABLE_ID}` (email, roles)
-        VALUES ('{email_clean}', [{roles_str}])
+        VALUES (@email, @roles)
     """
-    client.query(query).result()
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("email", "STRING", email.lower().strip()),
+            bigquery.ArrayQueryParameter("roles", "STRING", roles),
+        ]
+    )
+    client.query(query, job_config=job_config).result()
     return True
 
 
 def delete_agent(email: str):
-    """Delete a single agent row."""
     client = get_bq_client()
     query = f"DELETE FROM `{FULL_TABLE_ID}` WHERE email = @email"
     job_config = bigquery.QueryJobConfig(
@@ -127,6 +123,24 @@ def delete_agent(email: str):
         ]
     )
     client.query(query, job_config=job_config).result()
+
+
+def recreate_table():
+    """Drop and recreate the agent_schedule table to clear streaming buffer."""
+    client = get_bq_client()
+
+    # Drop existing table
+    client.delete_table(FULL_TABLE_ID, not_found_ok=True)
+
+    # Recreate with schema
+    schema = [
+        bigquery.SchemaField("email", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("roles", "STRING", mode="REPEATED"),
+    ]
+    table = bigquery.Table(FULL_TABLE_ID, schema=schema)
+    client.create_table(table)
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +167,6 @@ st.markdown("Edit roles per agent per day. Click **Save Changes** when done.")
 if df.empty:
     st.warning("No agents found in the table. Add one below.")
 else:
-    # Build an editable dataframe with dropdowns
     edited_df = st.data_editor(
         df,
         column_config={
@@ -246,7 +259,6 @@ st.divider()
 st.subheader("Shift Summary — Who's on today?")
 
 if not df.empty:
-    # Python weekday → template index (Sun=0)
     today_idx = (datetime.datetime.now().weekday() + 1) % 7
     today_name = DAYS[today_idx]
 
@@ -261,3 +273,36 @@ if not df.empty:
             st.markdown(f"**{role}:** {', '.join(agents_on)}")
         else:
             st.markdown(f"**{role}:** —")
+
+# ---------------------------------------------------------------------------
+# Refresh DB (drop & recreate table)
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("⚠️ Database Admin")
+
+st.warning(
+    "**Refresh DB** will drop and recreate the agent_schedule table. "
+    "All existing data will be permanently deleted. Use this only to fix "
+    "streaming buffer conflicts."
+)
+
+if st.button("🗑️ Refresh DB (Drop & Recreate Table)", type="secondary"):
+    confirm = st.session_state.get("confirm_refresh", False)
+    st.session_state.confirm_refresh = True
+
+if st.session_state.get("confirm_refresh", False):
+    st.error("Are you sure? This will delete ALL schedule data.")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("✅ Yes, recreate the table", type="primary"):
+            with st.spinner("Dropping and recreating table..."):
+                success = recreate_table()
+            if success:
+                st.success("Table recreated successfully! It's now empty and ready for DML.")
+                st.session_state.confirm_refresh = False
+                st.session_state.reload = True
+                st.rerun()
+    with col2:
+        if st.button("❌ Cancel"):
+            st.session_state.confirm_refresh = False
+            st.rerun()
