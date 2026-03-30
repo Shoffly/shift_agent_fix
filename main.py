@@ -22,6 +22,20 @@ FULL_TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}"
 DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 ROLE_OPTIONS = ["OFF", "Cash_Morning", "Cash_Night", "Swift", "Dealer", "Premium"]
 
+# ---------------------------------------------------------------------------
+# Base seed data (from current BQ table)
+# ---------------------------------------------------------------------------
+SEED_DATA = [
+    {"email": "hagar.ali@sylndr.com",      "roles": ["OFF", "OFF", "OFF", "OFF", "Cash_Morning", "Cash_Morning", "OFF"]},
+    {"email": "hagar.nazeh@sylndr.com",     "roles": ["OFF", "OFF", "Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning"]},
+    {"email": "mohamed.aly@sylndr.com",     "roles": ["Cash_Morning", "OFF", "OFF", "Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning"]},
+    {"email": "mohamed.hanfy@sylndr.com",   "roles": ["Cash_Morning", "OFF", "OFF", "OFF", "Cash_Morning", "Cash_Morning", "Cash_Morning"]},
+    {"email": "monira.galal@sylndr.com",    "roles": ["Cash_Morning", "Cash_Night", "Cash_Morning", "Cash_Morning", "OFF", "OFF", "Cash_Morning"]},
+    {"email": "omar.naser@sylndr.com",      "roles": ["OFF", "OFF", "OFF", "OFF", "OFF", "OFF", "OFF"]},
+    {"email": "nada.amr@sylndr.com",        "roles": ["Cash_Morning", "OFF", "Cash_Morning", "OFF", "OFF", "Cash_Morning", "Cash_Morning"]},
+    {"email": "sama.mostafa@sylndr.com",    "roles": ["Cash_Morning", "Cash_Night", "Cash_Morning", "OFF", "Cash_Morning", "OFF", "OFF"]},
+]
+
 
 # ---------------------------------------------------------------------------
 # BigQuery helpers
@@ -125,8 +139,8 @@ def delete_agent(email: str):
     client.query(query, job_config=job_config).result()
 
 
-def recreate_table():
-    """Drop and recreate the agent_schedule table to clear streaming buffer."""
+def recreate_table_with_seed():
+    """Drop, recreate table, and insert seed data."""
     client = get_bq_client()
 
     # Drop existing table
@@ -139,6 +153,20 @@ def recreate_table():
     ]
     table = bigquery.Table(FULL_TABLE_ID, schema=schema)
     client.create_table(table)
+
+    # Insert seed data via DML
+    for agent in SEED_DATA:
+        query = f"""
+            INSERT INTO `{FULL_TABLE_ID}` (email, roles)
+            VALUES (@email, @roles)
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("email", "STRING", agent["email"]),
+                bigquery.ArrayQueryParameter("roles", "STRING", agent["roles"]),
+            ]
+        )
+        client.query(query, job_config=job_config).result()
 
     return True
 
@@ -165,7 +193,7 @@ st.subheader("Weekly Schedule")
 st.markdown("Edit roles per agent per day. Click **Save Changes** when done.")
 
 if df.empty:
-    st.warning("No agents found in the table. Add one below.")
+    st.warning("No agents found in the table. Add one below or use **Reset DB** at the bottom.")
 else:
     edited_df = st.data_editor(
         df,
@@ -188,7 +216,6 @@ else:
         key="schedule_editor",
     )
 
-    # Save button
     col1, col2 = st.columns([1, 5])
     with col1:
         if st.button(
@@ -275,34 +302,32 @@ if not df.empty:
             st.markdown(f"**{role}:** —")
 
 # ---------------------------------------------------------------------------
-# Refresh DB (drop & recreate table)
+# Reset DB
 # ---------------------------------------------------------------------------
 st.divider()
 st.subheader("⚠️ Database Admin")
 
 st.warning(
-    "**Refresh DB** will drop and recreate the agent_schedule table. "
-    "All existing data will be permanently deleted. Use this only to fix "
-    "streaming buffer conflicts."
+    "**Reset DB** will drop and recreate the table with the default seed data. "
+    "Any custom changes will be lost."
 )
 
-if st.button("🗑️ Refresh DB (Drop & Recreate Table)", type="secondary"):
-    confirm = st.session_state.get("confirm_refresh", False)
-    st.session_state.confirm_refresh = True
+if st.button("🔄 Reset DB (Recreate with Base Data)", type="secondary"):
+    st.session_state.confirm_reset = True
 
-if st.session_state.get("confirm_refresh", False):
-    st.error("Are you sure? This will delete ALL schedule data.")
+if st.session_state.get("confirm_reset", False):
+    st.error("Are you sure? This will replace ALL data with the default schedule.")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("✅ Yes, recreate the table", type="primary"):
-            with st.spinner("Dropping and recreating table..."):
-                success = recreate_table()
+        if st.button("✅ Yes, reset the table", type="primary"):
+            with st.spinner("Dropping, recreating, and seeding table..."):
+                success = recreate_table_with_seed()
             if success:
-                st.success("Table recreated successfully! It's now empty and ready for DML.")
-                st.session_state.confirm_refresh = False
+                st.success("Table recreated with base data!")
+                st.session_state.confirm_reset = False
                 st.session_state.reload = True
                 st.rerun()
     with col2:
         if st.button("❌ Cancel"):
-            st.session_state.confirm_refresh = False
+            st.session_state.confirm_reset = False
             st.rerun()
