@@ -2,10 +2,10 @@
 Streamlit app to manage agent_schedule table in BigQuery.
 Displays a grid of agents × days with role dropdowns.
 Changes are written back to BigQuery on save.
-
 Run: streamlit run app.py
 """
 
+import datetime
 import streamlit as st
 import pandas as pd
 from google.cloud import bigquery
@@ -35,11 +35,12 @@ def get_bq_client():
     except (KeyError, FileNotFoundError):
         try:
             credentials = service_account.Credentials.from_service_account_file(
-                'service_account.json'
+                "service_account.json"
             )
         except FileNotFoundError:
             st.error(
-                "No credentials found. Please configure either Streamlit secrets or provide a service_account.json file."
+                "No credentials found. Please configure either Streamlit secrets "
+                "or provide a service_account.json file."
             )
             st.stop()
 
@@ -75,35 +76,44 @@ def load_schedule() -> pd.DataFrame:
 
 
 def save_schedule(df: pd.DataFrame):
-    """Overwrite the entire agent_schedule table with the DataFrame contents."""
+    """Overwrite the entire agent_schedule table with the DataFrame contents
+    using DML only (no streaming inserts) to avoid buffer conflicts.
+    """
     client = get_bq_client()
 
-    # Build rows for insertion
-    rows = []
+    if df.empty:
+        client.query(f"DELETE FROM `{FULL_TABLE_ID}` WHERE TRUE").result()
+        return True
+
+    # Build a VALUES clause for all rows
+    value_strings = []
     for _, row in df.iterrows():
+        email = row["email"].replace("'", "\\'")
         roles = [row[day] for day in DAYS]
-        rows.append({"email": row["email"], "roles": roles})
+        roles_str = ", ".join(f"'{r}'" for r in roles)
+        value_strings.append(f"('{email}', [{roles_str}])")
 
-    # Delete all existing rows and re-insert (simplest for a small table)
-    delete_query = f"DELETE FROM `{FULL_TABLE_ID}` WHERE TRUE"
-    client.query(delete_query).result()
+    values_clause = ",\n".join(value_strings)
 
-    if rows:
-        errors = client.insert_rows_json(FULL_TABLE_ID, rows)
-        if errors:
-            st.error(f"BigQuery insert errors: {errors}")
-            return False
-
+    query = f"""
+        DELETE FROM `{FULL_TABLE_ID}` WHERE TRUE;
+        INSERT INTO `{FULL_TABLE_ID}` (email, roles)
+        VALUES {values_clause};
+    """
+    client.query(query).result()
     return True
 
 
 def add_agent(email: str, roles: list[str]):
-    """Insert a single new agent row."""
+    """Insert a single new agent row via DML."""
     client = get_bq_client()
-    errors = client.insert_rows_json(FULL_TABLE_ID, [{"email": email.lower().strip(), "roles": roles}])
-    if errors:
-        st.error(f"Insert error: {errors}")
-        return False
+    email_clean = email.lower().strip().replace("'", "\\'")
+    roles_str = ", ".join(f"'{r}'" for r in roles)
+    query = f"""
+        INSERT INTO `{FULL_TABLE_ID}` (email, roles)
+        VALUES ('{email_clean}', [{roles_str}])
+    """
+    client.query(query).result()
     return True
 
 
@@ -112,7 +122,9 @@ def delete_agent(email: str):
     client = get_bq_client()
     query = f"DELETE FROM `{FULL_TABLE_ID}` WHERE email = @email"
     job_config = bigquery.QueryJobConfig(
-        query_parameters=[bigquery.ScalarQueryParameter("email", "STRING", email)]
+        query_parameters=[
+            bigquery.ScalarQueryParameter("email", "STRING", email)
+        ]
     )
     client.query(query, job_config=job_config).result()
 
@@ -145,7 +157,9 @@ else:
     edited_df = st.data_editor(
         df,
         column_config={
-            "email": st.column_config.TextColumn("Email", disabled=True, width="large"),
+            "email": st.column_config.TextColumn(
+                "Email", disabled=True, width="large"
+            ),
             **{
                 day: st.column_config.SelectboxColumn(
                     day,
@@ -164,7 +178,9 @@ else:
     # Save button
     col1, col2 = st.columns([1, 5])
     with col1:
-        if st.button("💾 Save Changes", type="primary", use_container_width=True):
+        if st.button(
+            "💾 Save Changes", type="primary", use_container_width=True
+        ):
             with st.spinner("Saving to BigQuery..."):
                 success = save_schedule(edited_df)
             if success:
@@ -188,7 +204,9 @@ col_add, col_remove = st.columns(2)
 with col_add:
     st.subheader("Add Agent")
     new_email = st.text_input("Email", placeholder="agent@sylndr.com")
-    new_default_role = st.selectbox("Default role for all days", ROLE_OPTIONS, index=0)
+    new_default_role = st.selectbox(
+        "Default role for all days", ROLE_OPTIONS, index=0
+    )
 
     if st.button("➕ Add Agent", use_container_width=True):
         if not new_email or "@" not in new_email:
@@ -207,8 +225,12 @@ with col_add:
 with col_remove:
     st.subheader("Remove Agent")
     if not df.empty:
-        remove_email = st.selectbox("Select agent to remove", df["email"].tolist())
-        if st.button("🗑️ Remove Agent", type="secondary", use_container_width=True):
+        remove_email = st.selectbox(
+            "Select agent to remove", df["email"].tolist()
+        )
+        if st.button(
+            "🗑️ Remove Agent", type="secondary", use_container_width=True
+        ):
             with st.spinner("Removing..."):
                 delete_agent(remove_email)
             st.success(f"Removed {remove_email}")
@@ -224,7 +246,6 @@ st.divider()
 st.subheader("Shift Summary — Who's on today?")
 
 if not df.empty:
-    import datetime
     # Python weekday → template index (Sun=0)
     today_idx = (datetime.datetime.now().weekday() + 1) % 7
     today_name = DAYS[today_idx]
