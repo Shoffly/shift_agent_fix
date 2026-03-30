@@ -26,14 +26,22 @@ ROLE_OPTIONS = ["OFF", "Cash_Morning", "Cash_Night", "Swift", "Dealer", "Premium
 # Base seed data (from current BQ table)
 # ---------------------------------------------------------------------------
 SEED_DATA = [
-    {"email": "hagar.ali@sylndr.com",      "roles": ["OFF", "OFF", "OFF", "OFF", "Cash_Morning", "Cash_Morning", "OFF"]},
-    {"email": "hagar.nazeh@sylndr.com",     "roles": ["OFF", "OFF", "Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning"]},
-    {"email": "mohamed.aly@sylndr.com",     "roles": ["Cash_Morning", "OFF", "OFF", "Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning"]},
-    {"email": "mohamed.hanfy@sylndr.com",   "roles": ["Cash_Morning", "OFF", "OFF", "OFF", "Cash_Morning", "Cash_Morning", "Cash_Morning"]},
-    {"email": "monira.galal@sylndr.com",    "roles": ["Cash_Morning", "Cash_Night", "Cash_Morning", "Cash_Morning", "OFF", "OFF", "Cash_Morning"]},
-    {"email": "omar.naser@sylndr.com",      "roles": ["OFF", "OFF", "OFF", "OFF", "OFF", "OFF", "OFF"]},
-    {"email": "nada.amr@sylndr.com",        "roles": ["Cash_Morning", "OFF", "Cash_Morning", "OFF", "OFF", "Cash_Morning", "Cash_Morning"]},
-    {"email": "sama.mostafa@sylndr.com",    "roles": ["Cash_Morning", "Cash_Night", "Cash_Morning", "OFF", "Cash_Morning", "OFF", "OFF"]},
+    {"email": "hagar.ali@sylndr.com",        "roles": ["OFF", "Cash_Morning", "OFF", "OFF", "Cash_Morning", "Cash_Morning", "OFF"]},
+    {"email": "hagar.nazeh@sylndr.com",       "roles": ["OFF", "OFF", "Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning"]},
+    {"email": "mohamed.aly@sylndr.com",       "roles": ["Cash_Morning", "OFF", "OFF", "Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning"]},
+    {"email": "mohamed.hanfy@sylndr.com",     "roles": ["Cash_Morning", "Cash_Morning", "OFF", "OFF", "Cash_Morning", "Cash_Morning", "Cash_Morning"]},
+    {"email": "monira.galal@sylndr.com",      "roles": ["Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning", "OFF", "OFF", "Cash_Morning"]},
+    {"email": "omar.naser@sylndr.com",        "roles": ["OFF", "OFF", "OFF", "OFF", "OFF", "OFF", "OFF"]},
+    {"email": "nada.amr@sylndr.com",          "roles": ["Cash_Morning", "Cash_Morning", "Cash_Morning", "OFF", "OFF", "Cash_Morning", "Cash_Morning"]},
+    {"email": "sama.mostafa@sylndr.com",      "roles": ["Cash_Morning", "Cash_Morning", "Cash_Morning", "OFF", "Cash_Morning", "OFF", "OFF"]},
+    {"email": "dunia.naser@sylndr.com",       "roles": ["Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning", "Cash_Morning", "OFF", "OFF"]},
+    {"email": "zahra.sayed@sylndr.com",       "roles": ["Swift", "Swift", "OFF", "Swift", "Swift", "Swift", "Swift"]},
+    {"email": "esraa.tarek@sylndr.com",       "roles": ["Swift", "Swift", "Swift", "OFF", "OFF", "Swift", "Swift"]},
+    {"email": "karim.wael@sylndr.com",        "roles": ["OFF", "OFF", "Swift", "Swift", "Swift", "Swift", "OFF"]},
+    {"email": "mohamed.elsaied@sylndr.com",   "roles": ["Dealer", "Dealer", "Dealer", "Dealer", "Dealer", "Dealer", "Dealer"]},
+    {"email": "dunya.sayed@sylndr.com",       "roles": ["Dealer", "Dealer", "Dealer", "Dealer", "Dealer", "Dealer", "Dealer"]},
+    {"email": "mai.sobhy@sylndr.com",         "roles": ["Dealer", "Dealer", "Dealer", "Dealer", "Dealer", "Dealer", "Dealer"]},
+    {"email": "kerolos.reyad@sylndr.com",     "roles": ["Premium", "Premium", "Premium", "Premium", "Premium", "Premium", "Premium"]},
 ]
 
 
